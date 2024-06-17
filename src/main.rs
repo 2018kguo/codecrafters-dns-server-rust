@@ -21,11 +21,21 @@ fn main() {
                 reply_header = DnsHeader {
                     id: incoming_msg.header.id,
                     questions: num_questions,
+                    answers: 1, 
                     ..reply_header
+                };
+                let answer = DnsAnswer {
+                    name: "codecrafters.io".to_string(),
+                    qtype: 1,
+                    qclass: 1,
+                    ttl: 60,
+                    rdlength: 4,
+                    rdata: vec![8,8, 8, 8],
                 };
                 let reply_message = DnsMessage {
                     header: reply_header,
                     questions: incoming_msg.questions, // use the same incoming questions
+                    answers: vec![answer],
                 };
                 udp_socket
                     .send_to(reply_message.to_bytes().as_slice(), source)

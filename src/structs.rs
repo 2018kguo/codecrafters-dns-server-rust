@@ -114,38 +114,18 @@ pub struct DnsQuestion {
 impl DnsQuestion {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
-        let mut qname_bytes = Vec::new();
         // labels are encoded as a byte for the length of the label followed by the label itself
-        for label in self.qname.split('.') {
-            qname_bytes.push(label.len() as u8);
-            qname_bytes.extend_from_slice(label.as_bytes());
-        }
-        qname_bytes.push(0); // null byte to terminate the domain name
-        bytes.extend_from_slice(&qname_bytes);
+        let name_bytes = write_name(&self.qname);
+        bytes.extend_from_slice(&name_bytes);
         bytes.extend_from_slice(&self.qtype.to_be_bytes());
         bytes.extend_from_slice(&self.qclass.to_be_bytes());
         bytes
     }
 
     pub fn from_bytes(bytes: &[u8]) -> DnsQuestion {
-        let mut qname = String::new();
         let mut i = 0;
-        loop {
-            let label_len = bytes[i] as usize;
-            if label_len == 0 {
-                break;
-            }
-            if i != 0 {
-                qname.push('.');
-            }
-            qname.push_str(
-                std::str::from_utf8(&bytes[i + 1..i + 1 + label_len])
-                    .expect("Invalid UTF-8 in domain name"),
-            );
-            i += label_len + 1;
-        }
-        assert!(bytes[i] == 0, "Domain name is not null-terminated");
-        i += 1; // skip the null byte
+        let (qname, j) = read_name(&bytes[i..]);
+        i += j;
         let qtype = u16::from_be_bytes([bytes[i], bytes[i + 1]]);
         assert!((1..=16).contains(&qtype), "Invalid qtype");
         let qclass = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]);
@@ -159,9 +139,55 @@ impl DnsQuestion {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DnsAnswer {
+    pub name: String, // the domain name that was queried
+    pub qtype: u16,
+    pub qclass: u16,
+    pub ttl: u32,
+    pub rdlength: u16,
+    pub rdata: Vec<u8>,
+}
+
+impl DnsAnswer {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let name_bytes = write_name(&self.name);
+        bytes.extend_from_slice(&name_bytes);
+        bytes.extend_from_slice(&self.qtype.to_be_bytes());
+        bytes.extend_from_slice(&self.qclass.to_be_bytes());
+        bytes.extend_from_slice(&self.ttl.to_be_bytes());
+        bytes.extend_from_slice(&self.rdlength.to_be_bytes());
+        bytes.extend_from_slice(&self.rdata);
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> DnsAnswer {
+        let mut i = 0;
+        let (name, j) = read_name(&bytes[i..]);
+        i += j;
+        let qtype = u16::from_be_bytes([bytes[i], bytes[i + 1]]);
+        assert!((1..=16).contains(&qtype), "Invalid qtype");
+        let qclass = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]);
+        assert!(qclass == 1, "Invalid qclass");
+        let ttl = u32::from_be_bytes([bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7]]);
+        let rdlength = u16::from_be_bytes([bytes[i + 8], bytes[i + 9]]);
+        let rdata = bytes[i + 10..i + 10 + rdlength as usize].to_vec();
+        DnsAnswer {
+            name,
+            qtype,
+            qclass,
+            ttl,
+            rdlength,
+            rdata,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DnsMessage {
     pub header: DnsHeader,
     pub questions: Vec<DnsQuestion>,
+    pub answers: Vec<DnsAnswer>,
 }
 
 impl DnsMessage {
@@ -170,6 +196,9 @@ impl DnsMessage {
         bytes.extend_from_slice(&self.header.to_bytes());
         for question in &self.questions {
             bytes.extend_from_slice(&question.to_bytes());
+        }
+        for answer in &self.answers {
+            bytes.extend_from_slice(&answer.to_bytes());
         }
         bytes
     }
@@ -184,8 +213,48 @@ impl DnsMessage {
             questions.push(question.clone());
             i += question.to_bytes().len();
         }
-        DnsMessage { header, questions }
+        let answers = Vec::new();
+        for _ in 0..header.answers {
+            let answer = DnsAnswer::from_bytes(&bytes[i..]);
+            i += answer.to_bytes().len();
+        }
+        DnsMessage {
+            header,
+            questions,
+            answers,
+        }
     }
+}
+
+fn write_name(name: &str) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for label in name.split('.') {
+        bytes.push(label.len() as u8);
+        bytes.extend_from_slice(label.as_bytes());
+    }
+    bytes.push(0);
+    bytes
+}
+
+fn read_name(bytes: &[u8]) -> (String, usize) {
+    let mut name = String::new();
+    let mut i = 0;
+    loop {
+        let label_len = bytes[i] as usize;
+        if label_len == 0 {
+            break;
+        }
+        if i != 0 {
+            name.push('.');
+        }
+        name.push_str(
+            std::str::from_utf8(&bytes[i + 1..i + 1 + label_len])
+                .expect("Invalid UTF-8 in domain name"),
+        );
+        i += label_len + 1;
+    }
+    assert!(bytes[i] == 0, "Domain name is not null-terminated");
+    (name, i + 1) // skip the null byte
 }
 
 #[cfg(test)]
@@ -300,6 +369,48 @@ mod test {
                 qname: "www.example.com".to_string(),
                 qtype: 1,
                 qclass: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn test_dns_answer_to_bytes() {
+        let answer = DnsAnswer {
+            name: "www.example.com".to_string(),
+            qtype: 1,
+            qclass: 1,
+            ttl: 60,
+            rdlength: 4,
+            rdata: vec![192, 168, 1, 1],
+        };
+        let bytes = answer.to_bytes();
+        assert_eq!(
+            bytes,
+            vec![
+                0x03, 0x77, 0x77, 0x77, 0x07, 0x65, 0x78, 0x61, 0x6D, 0x70, 0x6C, 0x65, 0x03, 0x63,
+                0x6F, 0x6D, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3C, 0x00, 0x04, 0xC0,
+                0xA8, 0x01, 0x01
+            ]
+        )
+    }
+
+    #[test]
+    fn test_dns_answer_from_bytes() {
+        let bytes = vec![
+            0x03, 0x77, 0x77, 0x77, 0x07, 0x65, 0x78, 0x61, 0x6D, 0x70, 0x6C, 0x65, 0x03, 0x63,
+            0x6F, 0x6D, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3C, 0x00, 0x04, 0xC0,
+            0xA8, 0x01, 0x01,
+        ];
+        let answer = DnsAnswer::from_bytes(&bytes);
+        assert_eq!(
+            answer,
+            DnsAnswer {
+                name: "www.example.com".to_string(),
+                qtype: 1,
+                qclass: 1,
+                ttl: 60,
+                rdlength: 4,
+                rdata: vec![192, 168, 1, 1],
             }
         );
     }
