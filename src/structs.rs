@@ -122,9 +122,12 @@ impl DnsQuestion {
         bytes
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> DnsQuestion {
+    pub fn from_bytes(bytes: &[u8], message_bytes: &[u8]) -> DnsQuestion {
         let mut i = 0;
-        let (qname, j) = read_name(&bytes[i..]);
+        // if compression is used, then the first two bits of the first byte will be 11
+        // and the remaining 14 bits will be an offset to the actual domain name
+        // the offset is a 14-bit number that is the number of bytes from the start of the message
+        let (qname, j) = read_name(&bytes[i..], message_bytes);
         i += j;
         let qtype = u16::from_be_bytes([bytes[i], bytes[i + 1]]);
         assert!((1..=16).contains(&qtype), "Invalid qtype");
@@ -161,9 +164,9 @@ impl DnsAnswer {
         bytes
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> DnsAnswer {
+    pub fn from_bytes(bytes: &[u8], message_bytes: &[u8]) -> DnsAnswer {
         let mut i = 0;
-        let (name, j) = read_name(&bytes[i..]);
+        let (name, j) = read_name(&bytes[i..], message_bytes);
         i += j;
         let qtype = u16::from_be_bytes([bytes[i], bytes[i + 1]]);
         assert!((1..=16).contains(&qtype), "Invalid qtype");
@@ -209,13 +212,13 @@ impl DnsMessage {
         let mut questions = Vec::new();
         let mut i = 12;
         for _ in 0..num_questions {
-            let question = DnsQuestion::from_bytes(&bytes[i..]);
+            let question = DnsQuestion::from_bytes(&bytes[i..], bytes);
             questions.push(question.clone());
             i += question.to_bytes().len();
         }
         let answers = Vec::new();
         for _ in 0..header.answers {
-            let answer = DnsAnswer::from_bytes(&bytes[i..]);
+            let answer = DnsAnswer::from_bytes(&bytes[i..], bytes);
             i += answer.to_bytes().len();
         }
         DnsMessage {
@@ -236,11 +239,26 @@ fn write_name(name: &str) -> Vec<u8> {
     bytes
 }
 
-fn read_name(bytes: &[u8]) -> (String, usize) {
+fn read_name(bytes: &[u8], message_bytes: &[u8]) -> (String, usize) {
     let mut name = String::new();
     let mut i = 0;
+    let mut last_label_compressed = false;
     loop {
         let label_len = bytes[i] as usize;
+        if bytes[i] & 0b1100_0000 == 0b1100_0000 {
+            let offset = u16::from_be_bytes([bytes[i], bytes[i + 1]]) & 0b0011_1111_1111_1111;
+            let (name_from_offset, _) = read_name(&message_bytes[offset as usize..], message_bytes);
+            println!("name_from_offset: {}", name_from_offset);
+            if i != 0 {
+                name.push('.');
+            }
+            name.push_str(&name_from_offset);
+            i += 2;
+            // this break is technically wrong, we should also handle pointers in the middle of the domain name
+            last_label_compressed = true;
+            //return (name, i + 2);
+            continue;
+        }
         if label_len == 0 {
             break;
         }
@@ -252,9 +270,13 @@ fn read_name(bytes: &[u8]) -> (String, usize) {
                 .expect("Invalid UTF-8 in domain name"),
         );
         i += label_len + 1;
+        last_label_compressed = false;
     }
-    assert!(bytes[i] == 0, "Domain name is not null-terminated");
-    (name, i + 1) // skip the null byte
+    if !last_label_compressed {
+        assert!(bytes[i] == 0, "Domain name is not null-terminated");
+        i += 1;
+    }
+    (name, i) // skip the null byte
 }
 
 #[cfg(test)]
@@ -362,7 +384,7 @@ mod test {
             0x03, 0x77, 0x77, 0x77, 0x07, 0x65, 0x78, 0x61, 0x6D, 0x70, 0x6C, 0x65, 0x03, 0x63,
             0x6F, 0x6D, 0x00, 0x00, 0x01, 0x00, 0x01,
         ];
-        let question = DnsQuestion::from_bytes(&bytes);
+        let question = DnsQuestion::from_bytes(&bytes, &[]);
         assert_eq!(
             question,
             DnsQuestion {
@@ -401,7 +423,7 @@ mod test {
             0x6F, 0x6D, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3C, 0x00, 0x04, 0xC0,
             0xA8, 0x01, 0x01,
         ];
-        let answer = DnsAnswer::from_bytes(&bytes);
+        let answer = DnsAnswer::from_bytes(&bytes, &[]);
         assert_eq!(
             answer,
             DnsAnswer {
@@ -411,6 +433,93 @@ mod test {
                 ttl: 60,
                 rdlength: 4,
                 rdata: vec![192, 168, 1, 1],
+            }
+        );
+    }
+
+    #[test]
+    fn test_read_dns_question_with_compresion() {
+        // this is a compressed domain name_byte
+        // the first two bits of the first byte are 11
+        // the remaining 14 bits are the offset to the actual domain name
+        let bytes = vec![0b1100_0000, 0x00, 0x00, 0x01, 0x00, 0x01];
+        // this is a dns record section for www.example.com type A and class IN
+        let message_bytes = vec![
+            0x03, 0x77, 0x77, 0x77, 0x07, 0x65, 0x78, 0x61, 0x6D, 0x70, 0x6C, 0x65, 0x03, 0x63,
+            0x6F, 0x6D, 0x00, 0x00, 0x01, 0x00, 0x01,
+        ];
+        let question = DnsQuestion::from_bytes(&bytes, message_bytes.as_slice());
+        assert_eq!(
+            question,
+            DnsQuestion {
+                qname: "www.example.com".to_string(),
+                qtype: 1,
+                qclass: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn test_read_dns_question_compression_in_middle() {
+        // 3 www <pointer to index 0> 3 com 0
+        let bytes = vec![
+            0x03,
+            0x77,
+            0x77,
+            0x77,
+            0b1100_0000,
+            0x00,
+            0x03,
+            0x63,
+            0x6F,
+            0x6D,
+            0x00,
+            0x00,
+            0x01,
+            0x00,
+            0x01,
+        ];
+        // this is a dns record section for "example" type A and class IN
+        let message_bytes = vec![
+            0x07, 0x65, 0x78, 0x61, 0x6D, 0x70, 0x6C, 0x65, 0x00, 0x00, 0x01, 0x00, 0x01,
+        ];
+        let question = DnsQuestion::from_bytes(&bytes, message_bytes.as_slice());
+        assert_eq!(
+            question,
+            DnsQuestion {
+                qname: "www.example.com".to_string(),
+                qtype: 1,
+                qclass: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn test_read_dns_question_compression_at_end() {
+        // 3 www <pointer to index 0>
+        let bytes = vec![
+            0x03,
+            0x77,
+            0x77,
+            0x77,
+            0b1100_0000,
+            0x00,
+            0x00,
+            0x01,
+            0x00,
+            0x01,
+        ];
+        // this is a dns record section for "example" type A and class IN
+        let message_bytes = vec![
+            0x07, 0x65, 0x78, 0x61, 0x6D, 0x70, 0x6C, 0x65, 0x00, 0x00, 0x01, 0x00, 0x01,
+        ];
+        let question = DnsQuestion::from_bytes(&bytes, message_bytes.as_slice());
+        assert_eq!(
+            question,
+            DnsQuestion {
+                qname: "www.example".to_string(),
+                qtype: 1,
+                qclass: 1,
             }
         );
     }

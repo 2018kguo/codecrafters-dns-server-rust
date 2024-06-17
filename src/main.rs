@@ -25,7 +25,7 @@ fn main() {
                 reply_header = DnsHeader {
                     id: incoming_msg.header.id,
                     questions: num_questions,
-                    answers: 1, 
+                    answers: num_questions,
                     opcode: incoming_msg.header.opcode,
                     recursion_desired: incoming_msg.header.recursion_desired,
                     rescode,
@@ -41,18 +41,15 @@ fn main() {
                 } else {
                     "codecrafters.io"
                 };
-                let answer = DnsAnswer {
-                    name: answer_domain.to_string(),
-                    qtype: 1,
-                    qclass: 1,
-                    ttl: 60,
-                    rdlength: 4,
-                    rdata: vec![8,8, 8, 8],
-                };
+                let mut answers = Vec::new();
+                for _ in 0..num_questions {
+                    let answer = make_answer(answer_domain);
+                    answers.push(answer);
+                }
                 let reply_message = DnsMessage {
                     header: reply_header,
                     questions: incoming_msg.questions, // use the same incoming questions
-                    answers: vec![answer],
+                    answers,
                 };
                 udp_socket
                     .send_to(reply_message.to_bytes().as_slice(), source)
@@ -63,5 +60,16 @@ fn main() {
                 break;
             }
         }
+    }
+}
+
+fn make_answer(domain: &str) -> DnsAnswer {
+    DnsAnswer {
+        name: domain.to_string(),
+        qtype: 1,
+        qclass: 1,
+        ttl: 60,
+        rdlength: 4,
+        rdata: vec![8, 8, 8, 8],
     }
 }
