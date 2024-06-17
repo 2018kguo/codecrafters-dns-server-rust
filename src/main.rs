@@ -36,7 +36,7 @@ fn main() {
                     z: false,
                     ..reply_header
                 };
-                let answer_domain = if incoming_msg.questions.len() > 0 {
+                let answer_domain = if !incoming_msg.questions.is_empty() {
                     &incoming_msg.questions[0].qname
                 } else {
                     "codecrafters.io"
