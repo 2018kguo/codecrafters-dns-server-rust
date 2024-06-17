@@ -1,6 +1,6 @@
 // Uncomment this block to pass the first stage
 use std::net::UdpSocket;
-use structs::DnsHeader;
+use structs::*;
 
 mod structs;
 fn main() {
@@ -15,10 +15,16 @@ fn main() {
         match udp_socket.recv_from(&mut buf) {
             Ok((size, source)) => {
                 println!("Received {} bytes from {}", size, source);
-                let header = DnsHeader::default();
-                let header_bytes = header.to_bytes();
+                let incoming_msg = DnsMessage::from_bytes(&buf[..size]);
+                let num_questions = incoming_msg.header.questions;
+                let mut reply_header = DnsHeader::default();
+                reply_header.questions = num_questions;
+                let reply_message = DnsMessage {
+                    header: reply_header,
+                    questions: incoming_msg.questions, // use the same incoming questions
+                };
                 udp_socket
-                    .send_to(header_bytes.as_slice(), source)
+                    .send_to(&reply_message.to_bytes().as_slice(), source)
                     .expect("Failed to send response");
             }
             Err(e) => {

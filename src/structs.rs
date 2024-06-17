@@ -103,3 +103,87 @@ impl DnsHeader {
         }
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct DnsQuestion {
+    pub qname: String, // the domain name that is being queried
+    pub qtype: u16,    // 2 bytes, the type of record being queried (A, MX, CNAME, etc.)
+    pub qclass: u16,   // the class of the query (usually IN for internet)
+}
+
+impl DnsQuestion {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut qname_bytes = Vec::new();
+        // labels are encoded as a byte for the length of the label followed by the label itself
+        for label in self.qname.split('.') {
+            qname_bytes.push(label.len() as u8);
+            qname_bytes.extend_from_slice(label.as_bytes());
+        }
+        qname_bytes.push(0); // null byte to terminate the domain name
+        bytes.extend_from_slice(&qname_bytes);
+        bytes.extend_from_slice(&self.qtype.to_be_bytes());
+        bytes.extend_from_slice(&self.qclass.to_be_bytes());
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> DnsQuestion {
+        let mut qname = String::new();
+        let mut i = 0;
+        loop {
+            let label_len = bytes[i] as usize;
+            if label_len == 0 {
+                break;
+            }
+            if i != 0 {
+                qname.push('.');
+            }
+            qname.push_str(
+                std::str::from_utf8(&bytes[i + 1..i + 1 + label_len])
+                    .expect("Invalid UTF-8 in domain name"),
+            );
+            i += label_len + 1;
+        }
+        assert!(bytes[i] == 0, "Domain name is not null-terminated");
+        i += 1; // skip the null byte
+        let qtype = u16::from_be_bytes([bytes[i], bytes[i + 1]]);
+        assert!(1 <= qtype && qtype <= 16, "Invalid qtype");
+        let qclass = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]);
+        assert!(qclass == 1, "Invalid qclass");
+        DnsQuestion {
+            qname,
+            qtype,
+            qclass,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DnsMessage {
+    pub header: DnsHeader,
+    pub questions: Vec<DnsQuestion>,
+}
+
+impl DnsMessage {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&self.header.to_bytes());
+        for question in &self.questions {
+            bytes.extend_from_slice(&question.to_bytes());
+        }
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> DnsMessage {
+        let header = DnsHeader::from_bytes(&bytes[..12]);
+        let num_questions = header.questions as usize;
+        let mut questions = Vec::new();
+        let mut i = 12;
+        for _ in 0..num_questions {
+            let question = DnsQuestion::from_bytes(&bytes[i..]);
+            questions.push(question.clone());
+            i += question.to_bytes().len();
+        }
+        DnsMessage { header, questions }
+    }
+}
