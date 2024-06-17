@@ -18,10 +18,22 @@ fn main() {
                 let incoming_msg = DnsMessage::from_bytes(&buf[..size]);
                 let num_questions = incoming_msg.header.questions;
                 let mut reply_header = DnsHeader::default();
+                let rescode = match incoming_msg.header.opcode {
+                    0 => 0,
+                    _ => 4,
+                };
                 reply_header = DnsHeader {
                     id: incoming_msg.header.id,
                     questions: num_questions,
                     answers: 1, 
+                    opcode: incoming_msg.header.opcode,
+                    recursion_desired: incoming_msg.header.recursion_desired,
+                    rescode,
+                    response: true,
+                    authoritative_answer: false,
+                    truncated_message: false,
+                    recursion_available: false,
+                    z: false,
                     ..reply_header
                 };
                 let answer = DnsAnswer {
