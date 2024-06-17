@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DnsHeader {
     pub id: u16,
     pub response: bool,
@@ -104,7 +104,7 @@ impl DnsHeader {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DnsQuestion {
     pub qname: String, // the domain name that is being queried
     pub qtype: u16,    // 2 bytes, the type of record being queried (A, MX, CNAME, etc.)
@@ -147,7 +147,7 @@ impl DnsQuestion {
         assert!(bytes[i] == 0, "Domain name is not null-terminated");
         i += 1; // skip the null byte
         let qtype = u16::from_be_bytes([bytes[i], bytes[i + 1]]);
-        assert!(1 <= qtype && qtype <= 16, "Invalid qtype");
+        assert!((1..=16).contains(&qtype), "Invalid qtype");
         let qclass = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]);
         assert!(qclass == 1, "Invalid qclass");
         DnsQuestion {
@@ -158,7 +158,7 @@ impl DnsQuestion {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DnsMessage {
     pub header: DnsHeader,
     pub questions: Vec<DnsQuestion>,
@@ -185,5 +185,122 @@ impl DnsMessage {
             i += question.to_bytes().len();
         }
         DnsMessage { header, questions }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_dns_header_to_bytes() {
+        let header = DnsHeader {
+            id: 1234,
+            recursion_desired: true,
+            truncated_message: false,
+            authoritative_answer: false,
+            opcode: 0,
+            response: true,
+            rescode: 0,
+            checking_disabled: false,
+            authed_data: false,
+            z: false,
+            recursion_available: false,
+            questions: 0,
+            answers: 0,
+            authoritative_entries: 0,
+            resource_entries: 0,
+        };
+        let bytes = header.to_bytes();
+        assert_eq!(
+            bytes,
+            vec![
+                0x04,
+                0xD2,
+                0b1000_0001,
+                0b0000_0000,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00
+            ]
+        );
+    }
+
+    #[test]
+    fn test_dns_header_from_bytes() {
+        let bytes = vec![
+            0x04,
+            0xD2,
+            0b1000_0001,
+            0b0000_0000,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+        ];
+        let header = DnsHeader::from_bytes(&bytes);
+        assert_eq!(
+            header,
+            DnsHeader {
+                id: 1234,
+                recursion_desired: true,
+                truncated_message: false,
+                authoritative_answer: false,
+                opcode: 0,
+                response: true,
+                rescode: 0,
+                checking_disabled: false,
+                authed_data: false,
+                z: false,
+                recursion_available: false,
+                questions: 0,
+                answers: 0,
+                authoritative_entries: 0,
+                resource_entries: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn test_dns_question_to_bytes() {
+        let question = DnsQuestion {
+            qname: "www.example.com".to_string(),
+            qtype: 1,
+            qclass: 1,
+        };
+        let bytes = question.to_bytes();
+        assert_eq!(
+            bytes,
+            vec![
+                0x03, 0x77, 0x77, 0x77, 0x07, 0x65, 0x78, 0x61, 0x6D, 0x70, 0x6C, 0x65, 0x03, 0x63,
+                0x6F, 0x6D, 0x00, 0x00, 0x01, 0x00, 0x01
+            ]
+        );
+    }
+
+    #[test]
+    fn test_dns_question_from_bytes() {
+        let bytes = vec![
+            0x03, 0x77, 0x77, 0x77, 0x07, 0x65, 0x78, 0x61, 0x6D, 0x70, 0x6C, 0x65, 0x03, 0x63,
+            0x6F, 0x6D, 0x00, 0x00, 0x01, 0x00, 0x01,
+        ];
+        let question = DnsQuestion::from_bytes(&bytes);
+        assert_eq!(
+            question,
+            DnsQuestion {
+                qname: "www.example.com".to_string(),
+                qtype: 1,
+                qclass: 1,
+            }
+        );
     }
 }

@@ -18,13 +18,17 @@ fn main() {
                 let incoming_msg = DnsMessage::from_bytes(&buf[..size]);
                 let num_questions = incoming_msg.header.questions;
                 let mut reply_header = DnsHeader::default();
-                reply_header.questions = num_questions;
+                reply_header = DnsHeader {
+                    id: incoming_msg.header.id,
+                    questions: num_questions,
+                    ..reply_header
+                };
                 let reply_message = DnsMessage {
                     header: reply_header,
                     questions: incoming_msg.questions, // use the same incoming questions
                 };
                 udp_socket
-                    .send_to(&reply_message.to_bytes().as_slice(), source)
+                    .send_to(reply_message.to_bytes().as_slice(), source)
                     .expect("Failed to send response");
             }
             Err(e) => {
