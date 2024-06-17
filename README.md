@@ -1,4 +1,4 @@
-[![progress-banner](https://backend.codecrafters.io/progress/dns-server/a441616a-1150-4451-9420-a613af593440)](https://app.codecrafters.io/users/codecrafters-bot?r=2qF)
+https://app.codecrafters.io/users/2018kguo
 
 This is a starting point for Rust solutions to the
 ["Build Your Own DNS server" Challenge](https://app.codecrafters.io/courses/dns-server/overview).

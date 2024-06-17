@@ -36,8 +36,13 @@ fn main() {
                     z: false,
                     ..reply_header
                 };
+                let answer_domain = if incoming_msg.questions.len() > 0 {
+                    &incoming_msg.questions[0].qname
+                } else {
+                    "codecrafters.io"
+                };
                 let answer = DnsAnswer {
-                    name: "codecrafters.io".to_string(),
+                    name: answer_domain.to_string(),
                     qtype: 1,
                     qclass: 1,
                     ttl: 60,
