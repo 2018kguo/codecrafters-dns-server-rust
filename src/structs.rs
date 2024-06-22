@@ -216,10 +216,11 @@ impl DnsMessage {
             questions.push(question.clone());
             i += question.to_bytes().len();
         }
-        let answers = Vec::new();
+        let mut answers = Vec::new();
         for _ in 0..header.answers {
             let answer = DnsAnswer::from_bytes(&bytes[i..], bytes);
             i += answer.to_bytes().len();
+            answers.push(answer);
         }
         DnsMessage {
             header,
@@ -248,7 +249,6 @@ fn read_name(bytes: &[u8], message_bytes: &[u8]) -> (String, usize) {
         if bytes[i] & 0b1100_0000 == 0b1100_0000 {
             let offset = u16::from_be_bytes([bytes[i], bytes[i + 1]]) & 0b0011_1111_1111_1111;
             let (name_from_offset, _) = read_name(&message_bytes[offset as usize..], message_bytes);
-            println!("name_from_offset: {}", name_from_offset);
             if i != 0 {
                 name.push('.');
             }
